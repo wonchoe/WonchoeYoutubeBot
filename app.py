@@ -7,6 +7,7 @@ import fcntl
 import logging
 import asyncio
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 from telegram import (
@@ -25,141 +26,141 @@ from telegram.ext import (
 
 import yt_dlp
 
-# ---------------------------------------------------
+
+# ---------------------------------------------------------
 # LOGGING
-# ---------------------------------------------------
+# ---------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     datefmt="%H:%M:%S"
 )
-log = logging.getLogger("ytdl-bot")
+log = logging.getLogger("ytbot")
 
 
-# ---------------------------------------------------
+# ---------------------------------------------------------
 # ENV
-# ---------------------------------------------------
-log.info("📄 Loading .env...")
+# ---------------------------------------------------------
 load_dotenv(".env", override=True)
 
 
-# ---------------------------------------------------
-# ONE INSTANCE LOCK
-# ---------------------------------------------------
-def acquire_lock_or_exit():
+# ---------------------------------------------------------
+# SINGLE INSTANCE LOCK
+# ---------------------------------------------------------
+def lock_or_exit():
     try:
-        lock_file = "/tmp/ytdlbot.lock"
-        global lock_fp
-        lock_fp = open(lock_file, 'w')
-        fcntl.lockf(lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        log.info("🔒 Lock acquired")
+        fp = open("/tmp/ytdlbot.lock", "w")
+        fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        log.info("🔒 lock acquired")
     except IOError:
-        log.error("🚫 Another instance already running!")
+        log.error("🚫 another instance is running")
         sys.exit(1)
 
 
-acquire_lock_or_exit()
+lock_or_exit()
 
 
-# ---------------------------------------------------
-# GLOBAL STORAGE
-# ---------------------------------------------------
-# Тимчасове сховище для того, щоб опрацювати callback після отримання URL
-LINK_STORAGE = {}  # chat_id → url
+# ---------------------------------------------------------
+# STORAGE
+# ---------------------------------------------------------
+USER_LINK = {}   # chat_id → link
 
 
-# ---------------------------------------------------
-# CALLBACK KEYS
-# ---------------------------------------------------
+# ---------------------------------------------------------
+# CONSTANTS
+# ---------------------------------------------------------
 AUDIO = "audio"
 VIDEO = "video"
-VIDEO_QUALITY = "video_quality"
+QUALITY = "quality"
 
 
-# ---------------------------------------------------
-# HELPERS: PROGRESS BAR
-# ---------------------------------------------------
-def make_progress_bar(percent: float) -> str:
-    filled = int(percent / 5)  # 20 chars total
-    bar = "█" * filled + "░" * (20 - filled)
-    return f"[{bar}] {percent:.1f}%"
+# ---------------------------------------------------------
+# PROGRESS BAR HELPERS
+# ---------------------------------------------------------
+def make_bar(percent: float):
+    filled = int(percent / 5)
+    return "█" * filled + "░" * (20 - filled)
 
 
-# ---------------------------------------------------
-# EXTRACT AVAILABLE VIDEO FORMATS
-# ---------------------------------------------------
-async def extract_formats(url: str):
-    log.info("🔎 Extracting available formats...")
+# ---------------------------------------------------------
+# YT-DLP THREAD EXECUTOR
+# ---------------------------------------------------------
+POOL = ThreadPoolExecutor(max_workers=4)
 
-    ydl_opts = {
+
+# ---------------------------------------------------------
+# GET FORMATS
+# ---------------------------------------------------------
+async def get_formats(url: str):
+    options = {
         "quiet": True,
+        "cookiefile": "/tmp/cookies.txt",
         "nocheckcertificate": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["ios", "web", "android"],
+            }
+        }
     }
+    loop = asyncio.get_running_loop()
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    def extract():
+        with yt_dlp.YoutubeDL(options) as ydl:
+            return ydl.extract_info(url, download=False)
 
-    formats = info.get("formats", [])
+    info = await loop.run_in_executor(POOL, extract)
 
-    # Забираємо лише ті, що мають height (роздільну здатність)
     out = {}
-    for f in formats:
-        height = f.get("height")
-        ext = f.get("ext")
-        if height and ext in ["mp4", "webm"]:
-            out[height] = f["format_id"]
+    for f in info.get("formats", []):
+        h = f.get("height")
+        if h and f.get("ext") in ["mp4", "webm"]:
+            out[h] = f["format_id"]
 
-    # Сортуємо від найвищої якості до найнижчої
-    sorted_out = dict(sorted(out.items(), reverse=True))
-    return sorted_out
+    out = dict(sorted(out.items(), reverse=True))
+    log.info(f"Available formats: {out}")
+    return out
 
 
-# ---------------------------------------------------
-# DOWNLOAD WITH PROGRESS + SEND
-# ---------------------------------------------------
-async def download_and_send(
+# ---------------------------------------------------------
+# DOWNLOAD (THREAD) + PROGRESS (ASYNC)
+# ---------------------------------------------------------
+async def download(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     url: str,
     mode: str,
-    quality_format_id: str | None = None
+    video_fmt: str | None = None,
 ):
     chat_id = update.effective_chat.id
+    status_msg = await context.bot.send_message(chat_id, "⏳ Starting...")
 
-    status_msg = await context.bot.send_message(
-        chat_id, "⏳ Preparing download..."
-    )
+    download_dir = Path("downloads")
+    download_dir.mkdir(exist_ok=True)
 
-    download_dir = Path(os.environ.get("DOWNLOAD_DIR", "downloads"))
-    download_dir.mkdir(parents=True, exist_ok=True)
-
-    # ---------------------------
-    # ПРОГРЕС ХУК
-    # ---------------------------
     last_update = 0
 
-    async def progress_hook(d):
+    # async progress callback
+    async def update_progress(d):
         nonlocal last_update
 
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            downloaded = d.get("downloaded_bytes", 0)
+            done = d.get("downloaded_bytes", 0)
 
             if total > 0:
-                percent = downloaded / total * 100
+                percent = done / total * 100
                 if time.time() - last_update > 0.5:
                     last_update = time.time()
-                    bar = make_progress_bar(percent)
+                    bar = make_bar(percent)
                     try:
                         await status_msg.edit_text(
-                            f"⬇️ Downloading...\n{bar}"
+                            f"⬇️ Downloading...\n{bar} {percent:.1f}%"
                         )
                     except:
                         pass
             else:
                 if time.time() - last_update > 0.5:
-                    last_update = time.time()
-                    mb = downloaded / 1024 / 1024
+                    mb = done / 1024 / 1024
                     try:
                         await status_msg.edit_text(
                             f"⬇️ Downloading...\n{mb:.1f} MB"
@@ -169,175 +170,138 @@ async def download_and_send(
 
         elif d["status"] == "finished":
             try:
-                await status_msg.edit_text("🔄 Converting / Finalizing...")
+                await status_msg.edit_text("🔄 Converting...")
             except:
                 pass
 
-    # ---------------------------
-    # DOWNLOAD OPTIONS
-    # ---------------------------
-    if mode == AUDIO:
-        ydl_opts = {
-            "format": "bestaudio/best",
+    # sync wrapper
+    def sync_download():
+        opts = {
             "cookiefile": "/tmp/cookies.txt",
             "outtmpl": str(download_dir / "%(title)s.%(ext)s"),
             "quiet": True,
             "nocheckcertificate": True,
-            "progress_hooks": [lambda d: asyncio.create_task(progress_hook(d))],
-            "postprocessors": [{
+            "progress_hooks": [lambda d: asyncio.run_coroutine_threadsafe(update_progress(d), asyncio.get_running_loop())],
+        }
+
+        if mode == AUDIO:
+            opts["format"] = "bestaudio/best"
+            opts["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "0",
-            }],
-        }
-    else:  # VIDEO
-        if quality_format_id:
-            fmt = f"{quality_format_id}+bestaudio/best"
+            }]
         else:
-            fmt = "bestvideo+bestaudio"
+            if video_fmt:
+                opts["format"] = f"{video_fmt}+bestaudio/best"
+            else:
+                opts["format"] = "bestvideo+bestaudio"
+            opts["merge_output_format"] = "mp4"
 
-        ydl_opts = {
-            "format": fmt,
-            "cookiefile": "/tmp/cookies.txt",
-            "outtmpl": str(download_dir / "%(title)s.%(ext)s"),
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "nocheckcertificate": True,
-            "progress_hooks": [lambda d: asyncio.create_task(progress_hook(d))],
-        }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info), mode
 
-        filepath = Path(ydl.prepare_filename(info))
+    loop = asyncio.get_running_loop()
+    filepath, mode = await loop.run_in_executor(POOL, sync_download)
 
-        # Якщо це аудіо — замінимо суфікс на .mp3
-        if mode == AUDIO:
-            filepath = filepath.with_suffix(".mp3")
+    fp = Path(filepath)
+    if mode == AUDIO:
+        fp = fp.with_suffix(".mp3")
 
-        await status_msg.edit_text("📤 Uploading to Telegram...")
+    await status_msg.edit_text("📤 Uploading...")
 
-        # надсилання файлу
-        with filepath.open("rb") as f:
-            await context.bot.send_document(
-                chat_id,
-                document=InputFile(f, filename=filepath.name),
-                caption="Готово ✔"
-            )
+    with fp.open("rb") as f:
+        await context.bot.send_document(
+            chat_id,
+            document=InputFile(f, filename=fp.name),
+            caption="Готово ✔"
+        )
 
-        await status_msg.edit_text("✅ Done!")
-
-    except Exception as e:
-        log.error(f"❌ Error: {e}")
-        await status_msg.edit_text(f"⚠️ Error: {e}")
+    await status_msg.edit_text("✅ Done")
 
 
-# ---------------------------------------------------
-# MESSAGE HANDLER
-# ---------------------------------------------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------------------------------------------------
+# TEXT HANDLER
+# ---------------------------------------------------------
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg or not msg.text:
+    link = msg.text.strip()
+
+    yt_re = re.compile(r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[^\s]+")
+    m = yt_re.search(link)
+    if not m:
+        await msg.reply_text("Будь ласка, надішліть YouTube лінк.")
         return
 
-    text = msg.text.strip()
+    USER_LINK[update.effective_chat.id] = m.group(0)
 
-    youtube_regex = re.compile(r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[^\s]+")
-    match = youtube_regex.search(text)
-
-    if not match:
-        await msg.reply_text("Будь ласка, надішліть коректне посилання на YouTube.")
-        return
-
-    url = match.group(0)
-    LINK_STORAGE[update.effective_chat.id] = url
-
-    keyboard = [
-        [InlineKeyboardButton("🎧 Audio (MP3)", callback_data=AUDIO)],
-        [InlineKeyboardButton("🎬 Video (MP4)", callback_data=VIDEO)],
+    kb = [
+        [InlineKeyboardButton("🎧 Audio", callback_data=AUDIO)],
+        [InlineKeyboardButton("🎬 Video", callback_data=VIDEO)],
     ]
-
-    await msg.reply_text(
-        "Що хочете завантажити?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await msg.reply_text("Що завантажити?", reply_markup=InlineKeyboardMarkup(kb))
 
 
-# ---------------------------------------------------
+# ---------------------------------------------------------
 # CALLBACK HANDLER
-# ---------------------------------------------------
+# ---------------------------------------------------------
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    q = update.callback_query
+    await q.answer()
 
     chat_id = update.effective_chat.id
-    url = LINK_STORAGE.get(chat_id)
+    link = USER_LINK.get(chat_id)
 
-    if not url:
-        await query.edit_message_text("⚠️ Посилання не знайдене. Надішліть його ще раз.")
+    if not link:
+        await q.edit_message_text("Немає посилання. Надішліть знову.")
         return
 
-    data = query.data
+    data = q.data
 
-    # ----------------------------- AUDIO -----------------------------
     if data == AUDIO:
-        await query.edit_message_text("🎧 Завантаження аудіо...")
-        await download_and_send(update, context, url, AUDIO)
-        return
+        await q.edit_message_text("🎧 Завантажуємо аудіо...")
+        return await download(update, context, link, AUDIO)
 
-    # ----------------------------- VIDEO -----------------------------
     if data == VIDEO:
-        await query.edit_message_text("🔎 Збираємо доступні формати...")
-        formats = await extract_formats(url)
+        await q.edit_message_text("🔎 Отримуємо формати...")
+        formats = await get_formats(link)
 
         if not formats:
-            await query.edit_message_text("⚠️ Не вдалося отримати список якостей.")
-            return
+            return await q.edit_message_text("⚠️ Не знайдено форматів.")
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    f"{height}p",
-                    callback_data=f"{VIDEO_QUALITY}:{height}"
-                )
-            ]
-            for height in formats.keys()
+        kb = [
+            [InlineKeyboardButton(f"{h}p", callback_data=f"{QUALITY}:{h}")]
+            for h in formats.keys()
         ]
-
-        await query.edit_message_text(
-            "Оберіть якість відео:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+        return await q.edit_message_text(
+            "Оберіть якість:",
+            reply_markup=InlineKeyboardMarkup(kb)
         )
-        return
 
-    # -------------------- SELECT VIDEO QUALITY -----------------------
-    if data.startswith(f"{VIDEO_QUALITY}:"):
-        _, height_str = data.split(":")
-        height = int(height_str)
+    if data.startswith(f"{QUALITY}:"):
+        height = int(data.split(":")[1])
+        formats = await get_formats(link)
+        fmt_id = formats.get(height)
 
-        formats = await extract_formats(url)
-        format_id = formats.get(height)
-
-        await query.edit_message_text(f"🎬 Завантаження {height}p...")
-        await download_and_send(update, context, url, VIDEO, format_id)
+        await q.edit_message_text(f"🎬 Завантажуємо {height}p...")
+        return await download(update, context, link, VIDEO, fmt_id)
 
 
-# ---------------------------------------------------
+# ---------------------------------------------------------
 # MAIN
-# ---------------------------------------------------
+# ---------------------------------------------------------
 def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        log.critical("❗ TELEGRAM_BOT_TOKEN not set!")
-        raise RuntimeError("Missing token")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
     app = ApplicationBuilder().token(token).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    log.info("🤖 Bot started (polling)...")
+    log.info("🤖 Bot started")
     app.run_polling(close_loop=False)
 
 
