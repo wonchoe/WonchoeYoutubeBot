@@ -1,4 +1,19 @@
 import os
+import shutil
+
+# Визначаємо правильний шлях до Node.js (для локалки та Docker)
+local_nvm_path = "/home/ubuntu/.nvm/versions/node/v20.19.4/bin"
+if os.path.exists(local_nvm_path):
+    # Локальне середовище з NVM
+    node_dir = local_nvm_path
+    node_binary = os.path.join(node_dir, "node")
+    os.environ["PATH"] = node_dir + os.pathsep + os.environ["PATH"]
+else:
+    # Docker або системний node
+    node_binary = shutil.which("node") or "node"
+
+print(f"✅ Node.js binary: {node_binary}")
+
 import re
 import sys
 import time
@@ -115,10 +130,15 @@ async def get_formats(url: str):
         "nocheckcertificate": True,
         "extractor_args": {
             "youtube": {
-                "player_client": ["web"],  # ✅ Тільки web
-                "skip": ["hls", "dash"],
+                "player_client": ["ios", "web", "android"],
             }
-        }
+        },
+        "js_runtimes": {
+            "node": {
+                "path": node_binary
+            }
+        },
+        "remote_components": ["ejs:github"]
     }
     loop = asyncio.get_running_loop()
 
@@ -256,22 +276,23 @@ async def download(
             "quiet": True,
             "nocheckcertificate": True,
             "progress_hooks": [progress_hook],
-            "restrictfilenames": True,
-            # ✅ Тільки web client
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["web"],
-                    "skip": ["hls", "dash"],
+            # Clean up filenames
+            "restrictfilenames": True,  # ASCII only
+            "js_runtimes": {
+                "node": {
+                    "path": node_binary
                 }
-            }
+            },
+            "remote_components": ["ejs:github"]
         }
 
         if mode == AUDIO:
+            # Download best audio + convert to MP3
             opts["format"] = "bestaudio/best"
             opts["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192",
+                "preferredquality": "192",  # 192kbps = good quality
             }]
             opts["writethumbnail"] = False
             opts["writesubtitles"] = False
@@ -280,7 +301,7 @@ async def download(
             if video_fmt:
                 opts["format"] = f"bestvideo[height<={video_fmt}]+bestaudio/best"
             else:
-                opts["format"] = "bestvideo+bestaudio/best"
+                opts["format"] = "bestvideo+bestaudio"
             opts["merge_output_format"] = "mp4"
 
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -450,155 +471,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = url_match.group(0)
-    
-    # ✅ Логування URL
-    log.info(f"📥 Received URL: {url}")
-
-    # ✅ Перевірка cookies
-    cookies_path = Path("/tmp/cookies.txt")
-    if cookies_path.exists():
-        cookie_age = datetime.now() - datetime.fromtimestamp(cookies_path.stat().st_mtime)
-        log.info(f"🍪 Cookies found, age: {cookie_age.days}d {cookie_age.seconds // 3600}h")
-        
-        # Показуємо перші 5 рядків cookies для дебагу
-        try:
-            with open(cookies_path, 'r') as f:
-                lines = f.readlines()[:5]
-                log.info(f"🍪 First cookies lines: {[l.strip()[:50] for l in lines if not l.startswith('#')]}")
-        except Exception as e:
-            log.warning(f"⚠️ Can't read cookies: {e}")
-    else:
-        log.warning("⚠️ No cookies.txt found at /tmp/cookies.txt")
 
     # Перевіряємо чи yt-dlp може його обробити
     try:
         opts = {
             "quiet": True,
-            "cookiefile": "/tmp/cookies.txt",
-            "nocheckcertificate": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["web"],
-                    "skip": ["hls", "dash"],
+            "js_runtimes": {
+                "node": {
+                    "path": node_binary
                 }
-            }
+            },
+            "remote_components": ["ejs:github"]
         }
-        
-        log.info(f"🔍 Extracting info with opts: {opts}")
-        
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            
-            # ✅ Перевірка чи є аудіо/відео формати
-            formats = info.get('formats', [])
-            has_formats = any(
-                f.get('vcodec') != 'none' or f.get('acodec') != 'none'
-                for f in formats
-            )
-            
-            if not has_formats:
-                log.error("❌ No audio/video formats available, only images")
-                log.info(f"Available formats: {[f.get('format_id') for f in formats]}")
-                
-                # ✅ Спробувати через embed (fallback)
-                try:
-                    log.info("🔄 Trying embed extractor as fallback...")
-                    opts_embed = opts.copy()
-                    opts_embed["extractor_args"] = {
-                        "youtube": {
-                            "player_client": ["web_embedded"],
-                            "skip": ["hls", "dash"],
-                        }
-                    }
-                    
-                    with yt_dlp.YoutubeDL(opts_embed) as ydl_embed:
-                        info = ydl_embed.extract_info(url, download=False)
-                        formats = info.get('formats', [])
-                        has_formats = any(
-                            f.get('vcodec') != 'none' or f.get('acodec') != 'none'
-                            for f in formats
-                        )
-                        
-                        if not has_formats:
-                            raise Exception("Still no formats")
-                        
-                        log.info("✅ Embed extractor worked!")
-                        
-                except Exception as embed_err:
-                    log.error(f"❌ Embed fallback failed: {embed_err}")
-                    await msg.reply_text(
-                        "❌ **YouTube заблокував доступ**\n\n"
-                        "Доступні тільки зображення (thumbnails).\n\n"
-                        "🔄 Спробуйте:\n"
-                        "• Інше відео\n"
-                        "• Почекати 10-15 хвилин\n"
-                        "• Повідомити адміна (@username)\n\n"
-                        "⚠️ YouTube посилив захист від ботів",
-                        parse_mode="Markdown"
-                    )
-                    return
-            
-            # ✅ Логування інфо
-            log.info(f"✅ Info extracted successfully")
-            log.info(f"   Title: {info.get('title', 'N/A')[:50]}")
-            log.info(f"   Uploader: {info.get('uploader', 'N/A')}")
-            log.info(f"   Duration: {info.get('duration', 0)}s")
-            log.info(f"   Formats: {len(formats)}")
-            
-    except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        log.error(f"❌ DownloadError: {error_msg}")
-        
-        # Детальні повідомлення про помилки
-        if "Sign in to confirm" in error_msg or "bot" in error_msg.lower():
-            await msg.reply_text(
-                "❌ **YouTube bot detection**\n\n"
-                "YouTube заблокував доступ.\n\n"
-                "🔄 Спробуйте:\n"
-                "• Почекати 5-10 хвилин\n"
-                "• Інше відео\n"
-                "• Повідомити адміна про проблему\n\n"
-                f"Помилка: `{error_msg[:150]}`",
-                parse_mode="Markdown"
-            )
-        elif "Video unavailable" in error_msg:
-            await msg.reply_text(
-                "❌ **Відео недоступне**\n\n"
-                "Можливі причини:\n"
-                "• Відео приватне\n"
-                "• Відео видалене\n"
-                "• Географічні обмеження\n\n"
-                f"Деталі: `{error_msg[:150]}`",
-                parse_mode="Markdown"
-            )
-        elif "429" in error_msg or "Too Many Requests" in error_msg:
-            await msg.reply_text(
-                "❌ **Забагато запитів**\n\n"
-                "YouTube тимчасово заблокував доступ.\n"
-                "Почекайте 10-15 хвилин.",
-                parse_mode="Markdown"
-            )
-        else:
-            await msg.reply_text(
-                f"❌ **Помилка YouTube**\n\n"
-                f"`{error_msg[:200]}`\n\n"
-                f"Спробуйте інше відео або повідомте адміна.",
-                parse_mode="Markdown"
-            )
-        return
-        
-    except Exception as e:
-        error_msg = str(e)
-        log.error(f"❌ Unexpected error: {error_msg}")
-        log.exception("Full traceback:")
-        
-        await msg.reply_text(
-            f"❌ **Несподівана помилка**\n\n"
-            f"Тип: `{type(e).__name__}`\n"
-            f"Повідомлення: `{error_msg[:150]}`\n\n"
-            f"Це посилання не підтримується або є проблема з сервером.",
-            parse_mode="Markdown"
-        )
+    except Exception:
+        await msg.reply_text("❌ Це посилання не підтримується.")
         return
 
     # Зберігаємо

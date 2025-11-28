@@ -2,23 +2,26 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# ✅ Встановити Node.js (для yt-dlp JS runtime)
+# 1. Встановлюємо базові утиліти та Node.js v20
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    nodejs \
-    npm \
     curl \
+    gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# ✅ Встановити yt-dlp через pip (найновіша версія)
+# 2. Встановлюємо yt-dlp та залежності
 RUN pip install --no-cache-dir -U yt-dlp
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# ✅ Перевірка чи Node.js встановлено
-RUN node --version && npm --version
+# 3. Перевірка версій
+RUN node -v && npm -v && yt-dlp --version
 
 CMD ["python", "app.py"]
