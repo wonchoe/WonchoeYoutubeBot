@@ -120,10 +120,12 @@ class YouTubeDownloader(BaseDownloader):
                 "progress_hooks": [progress_hook],
                 "restrictfilenames": True,
                 "noplaylist": True,
-                # YouTube specific options - використовуємо mweb (mobile web) для обходу
+                # Явно вказуємо Node.js для JS execution
+                "exec_cmd": {"node": "/usr/bin/node"},
+                # YouTube specific options - використовуємо android_creator замість mweb
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["mweb", "web"],
+                        "player_client": ["android_creator", "web"],
                         "skip": ["hls"],
                     }
                 },
