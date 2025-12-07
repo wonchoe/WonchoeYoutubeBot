@@ -1,5 +1,6 @@
 
 python-telegram-bot==20.7
 yt-dlp>=2025.5.26
-python-dotenv
-aiohttp
+python-dotenv==1.0.0
+aiohttp==3.9.1
+instaloader==4.10.3
