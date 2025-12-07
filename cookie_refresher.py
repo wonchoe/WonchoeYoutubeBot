@@ -42,24 +42,33 @@ async def refresh_cookies():
             await page.goto(YOUTUBE_URL, wait_until="domcontentloaded", timeout=30000)
             
             # Чекаємо завантаження
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
             
-            # Перевіряємо чи залогінені
-            is_logged_in = await page.locator('button[aria-label*="account"]').count() > 0
+            # Перевіряємо cookies замість DOM елементів (більш надійно)
+            cookies = await browser.cookies()
+            youtube_cookies = [c for c in cookies if 'youtube.com' in c.get('domain', '')]
             
-            if not is_logged_in:
+            # Перевіряємо критичні auth cookies
+            critical_cookies = ['SAPISID', 'SSID', '__Secure-1PSID', '__Secure-3PSID']
+            has_auth = any(
+                c.get('name') in critical_cookies 
+                for c in youtube_cookies
+            )
+            
+            if not has_auth:
                 log.warning("⚠️ Not logged in! Manual login required.")
                 log.warning("   Please run: python cookie_refresher.py --login")
+                log.info(f"   Found {len(youtube_cookies)} cookies but no auth cookies")
                 return False
             
             log.info("✅ Logged in, extracting cookies...")
             
-            # Отримуємо cookies
-            cookies = await browser.cookies()
+            # Отримуємо всі cookies (вже маємо з перевірки вище)
+            all_cookies = await browser.cookies()
             
-            # Фільтруємо тільки YouTube cookies
+            # Фільтруємо тільки YouTube і Google cookies
             youtube_cookies = [
-                c for c in cookies 
+                c for c in all_cookies
                 if 'youtube.com' in c.get('domain', '') or 'google.com' in c.get('domain', '')
             ]
             
@@ -85,8 +94,15 @@ async def refresh_cookies():
             # Зберігаємо
             COOKIE_FILE.write_text(''.join(netscape_lines))
             
+            # Логуємо критичні cookies для діагностики
+            critical_found = [
+                c.get('name') for c in youtube_cookies 
+                if c.get('name') in critical_cookies
+            ]
+            
             log.info(f"✅ Saved {len(youtube_cookies)} cookies to {COOKIE_FILE}")
             log.info(f"📊 Cookie file size: {COOKIE_FILE.stat().st_size} bytes")
+            log.info(f"✅ Critical cookies present: {', '.join(critical_found)}")
             
             # Перевіряємо критичні cookies
             cookie_names = [c.get('name') for c in youtube_cookies]
