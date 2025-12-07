@@ -168,17 +168,17 @@ class YouTubeDownloader(BaseDownloader):
             # Різні стратегії обходу YouTube блокування
             strategies = []
             
-            # ПРІОРИТЕТ 1: Cookies з android client (НАЙКРАЩЕ)
+            # ПРІОРИТЕТ 1: Cookies з web client (android не підтримує cookies!)
             if use_cookies:
                 opts_with_cookies = opts.copy()
                 opts_with_cookies["cookiefile"] = cookies_path
                 opts_with_cookies["extractor_args"] = {
                     "youtube": {
-                        "player_client": ["android", "web"],
+                        "player_client": ["web"],
                         "skip": ["hls", "dash"],
                     }
                 }
-                strategies.append(("with cookies (android)", opts_with_cookies))
+                strategies.append(("with cookies (web)", opts_with_cookies))
             
             # Стратегія 2: Без cookies + ios client
             opts_ios = opts.copy()

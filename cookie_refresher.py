@@ -84,7 +84,14 @@ async def refresh_cookies():
                 flag = 'TRUE' if domain.startswith('.') else 'FALSE'
                 path = cookie.get('path', '/')
                 secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
-                expiration = str(int(cookie.get('expires', -1)))
+                
+                # Виправляємо expires: -1 -> 0 (session cookie)
+                expires = cookie.get('expires', -1)
+                if expires == -1 or expires < 0:
+                    expiration = "0"
+                else:
+                    expiration = str(int(expires))
+                
                 name = cookie.get('name', '')
                 value = cookie.get('value', '')
                 
