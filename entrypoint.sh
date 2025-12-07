@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Видаляємо старий cookies файл якщо існує (може бути залишок від volume mount)
+if [ -f "/tmp/cookies.txt" ]; then
+    echo "🗑️  Removing old /tmp/cookies.txt..."
+    rm -f /tmp/cookies.txt
+fi
+
 # Копіюємо read-only cookies в /tmp/ якщо вони існують
 if [ -f "/app/cookies.txt" ]; then
     echo "📋 Copying and fixing cookies from /app/cookies.txt to /tmp/cookies.txt..."
