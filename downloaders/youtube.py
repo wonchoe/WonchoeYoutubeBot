@@ -88,7 +88,7 @@ class YouTubeDownloader(BaseDownloader):
         
         def sync_download():
             # Перевірка cookies файлу
-            cookies_path = "/tmp/cookies.txt"
+            cookies_path = "/tmp/ytdl-cookies.txt"
             if os.path.exists(cookies_path):
                 cookie_size = os.path.getsize(cookies_path)
                 with open(cookies_path, 'r') as f:
@@ -108,7 +108,7 @@ class YouTubeDownloader(BaseDownloader):
                     log.warning(f"⚠️  Missing critical cookies: {', '.join(missing_critical)}")
                     log.warning("   YouTube may block requests without these cookies")
             else:
-                log.warning("⚠️  YouTube cookies NOT FOUND at /tmp/cookies.txt")
+                log.warning("⚠️  YouTube cookies NOT FOUND at /tmp/ytdl-cookies.txt")
                 log.warning("   Bot may encounter 'Sign in to confirm you're not a bot' errors")
             
             opts = {
