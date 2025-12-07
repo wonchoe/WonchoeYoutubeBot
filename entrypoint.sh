@@ -1,19 +1,19 @@
 #!/bin/bash
 set -e
 
-# Пріоритет 1: Використовуємо hostPath файл якщо він свіжіший
-HOSTPATH_COOKIES="/app/cookies.txt"
-TMP_COOKIES="/tmp/cookies.txt"
+# Чіткі шляхи для cookies
+HOSTPATH_COOKIES="/app/ytdl-cookies.txt"
+TMP_COOKIES="/tmp/ytdl-cookies.txt"
 
 echo "🔍 Checking for cookies sources..."
 
-# Видаляємо старий /tmp/cookies.txt якщо він застарілий
+# Видаляємо старий /tmp/ytdl-cookies.txt якщо він застарілий
 if [ -f "$TMP_COOKIES" ]; then
-    echo "🗑️  Removing old /tmp/cookies.txt..."
+    echo "🗑️  Removing old $TMP_COOKIES..."
     rm -f "$TMP_COOKIES"
 fi
 
-# Копіюємо та конвертуємо cookies з /app/cookies.txt (hostPath)
+# Копіюємо та конвертуємо cookies з /app/ytdl-cookies.txt (hostPath)
 if [ -f "$HOSTPATH_COOKIES" ]; then
     echo "📋 Found cookies at $HOSTPATH_COOKIES"
     COOKIE_SIZE=$(stat -f%z "$HOSTPATH_COOKIES" 2>/dev/null || stat -c%s "$HOSTPATH_COOKIES" 2>/dev/null)
@@ -69,7 +69,7 @@ def fix_cookies(input_file, output_file):
     
     print(f"✅ Fixed {len(fixed_lines) - 2} cookies")
 
-fix_cookies('/app/cookies.txt', '/tmp/cookies.txt')
+fix_cookies('/app/ytdl-cookies.txt', '/tmp/ytdl-cookies.txt')
 EOF
         
         chmod 644 "$TMP_COOKIES"
@@ -78,9 +78,9 @@ EOF
         echo "⚠️  Warning: Cookie file is too small ($COOKIE_SIZE bytes), might be empty"
     fi
 else
-    echo "⚠️  Warning: /app/cookies.txt not found"
+    echo "⚠️  Warning: /app/ytdl-cookies.txt not found"
     echo "   Bot will work without cookies - some platforms may have limitations"
-    echo "   Create /var/www/ytdl-cookies.txt on host to enable cookie support"
+    echo "   Ensure /var/www/ytdl-cookies.txt exists on host and is mounted correctly"
 fi
 
 # Показуємо фінальний стан cookies

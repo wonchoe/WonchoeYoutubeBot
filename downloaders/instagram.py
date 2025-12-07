@@ -95,7 +95,7 @@ class InstagramDownloader(BaseDownloader):
             """Download using yt-dlp"""
             log.info("🔄 Trying yt-dlp...")
             opts = {
-                "cookiefile": "/tmp/cookies.txt",
+                "cookiefile": "/tmp/ytdl-cookies.txt",
                 "outtmpl": str(download_dir / "%(title)s_%(autonumber)s.%(ext)s"),
                 "quiet": False,  # Show more info
                 "no_warnings": False,
@@ -194,7 +194,7 @@ class InstagramDownloader(BaseDownloader):
             )
             
             # Try to load cookies if available
-            cookies_file = Path("/tmp/cookies.txt")
+            cookies_file = Path("/tmp/ytdl-cookies.txt")
             if cookies_file.exists():
                 try:
                     # Load cookies from Netscape format
