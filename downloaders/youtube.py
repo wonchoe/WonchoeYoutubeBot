@@ -167,23 +167,66 @@ class YouTubeDownloader(BaseDownloader):
             
             # Спроба завантаження з retry механізмом
             last_error = None
-            attempts = []
             
-            # Спроба 1: з cookies (якщо є)
+            # Різні стратегії обходу YouTube блокування
+            strategies = []
+            
+            # Стратегія 1: З cookies + android client
             if use_cookies:
-                attempts.append(("with cookies", opts.copy()))
+                opts_with_cookies = opts.copy()
+                opts_with_cookies["cookiefile"] = cookies_path
+                opts_with_cookies["extractor_args"] = {
+                    "youtube": {
+                        "player_client": ["android", "web"],
+                        "skip": ["hls", "dash"],
+                    }
+                }
+                strategies.append(("with cookies (android)", opts_with_cookies))
             
-            # Спроба 2: без cookies (для публічних відео)
-            opts_no_cookies = opts.copy()
-            if "cookiefile" in opts_no_cookies:
-                del opts_no_cookies["cookiefile"]
-            attempts.append(("without cookies", opts_no_cookies))
+            # Стратегія 2: Без cookies + ios client
+            opts_ios = opts.copy()
+            opts_ios["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["ios", "web"],
+                    "skip": ["hls", "dash"],
+                }
+            }
+            strategies.append(("without cookies (ios)", opts_ios))
             
-            for attempt_name, attempt_opts in attempts:
+            # Стратегія 3: Без cookies + mweb client (mobile web)
+            opts_mweb = opts.copy()
+            opts_mweb["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["mweb", "web"],
+                    "skip": ["hls", "dash"],
+                }
+            }
+            strategies.append(("without cookies (mweb)", opts_mweb))
+            
+            # Стратегія 4: Без cookies + tv client
+            opts_tv = opts.copy()
+            opts_tv["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["tv_embedded", "web"],
+                    "skip": ["hls", "dash"],
+                }
+            }
+            strategies.append(("without cookies (tv)", opts_tv))
+            
+            # Стратегія 5: Базовий android без skip
+            opts_android_full = opts.copy()
+            opts_android_full["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["android"],
+                }
+            }
+            strategies.append(("without cookies (android full)", opts_android_full))
+            
+            for strategy_name, strategy_opts in strategies:
                 try:
-                    log.info(f"🔄 Attempting download {attempt_name}...")
+                    log.info(f"🔄 Attempting download {strategy_name}...")
                     
-                    with yt_dlp.YoutubeDL(attempt_opts) as ydl:
+                    with yt_dlp.YoutubeDL(strategy_opts) as ydl:
                         info = ydl.extract_info(url, download=True)
                         
                         if not info:
@@ -204,30 +247,30 @@ class YouTubeDownloader(BaseDownloader):
                                 else:
                                     raise Exception(f"Audio file not found: {mp3_path}")
                             
-                            log.info(f"✅ Downloaded successfully {attempt_name}")
+                            log.info(f"✅ Downloaded successfully {strategy_name}")
                             return mp3_path, mode
                         else:
                             # Для відео
                             original_path = ydl.prepare_filename(info)
-                            log.info(f"✅ Downloaded successfully {attempt_name}")
+                            log.info(f"✅ Downloaded successfully {strategy_name}")
                             return original_path, mode
                 
                 except Exception as e:
                     last_error = e
                     error_msg = str(e)
-                    log.warning(f"⚠️ Attempt {attempt_name} failed: {error_msg}")
+                    log.warning(f"⚠️ Attempt {strategy_name} failed: {error_msg}")
                     
                     # Якщо це остання спроба - кидаємо помилку
-                    if attempt_name == attempts[-1][0]:
-                        log.error(f"❌ All download attempts failed")
+                    if strategy_name == strategies[-1][0]:
+                        log.error(f"❌ All download strategies failed")
                         raise last_error
                     
                     # Інакше пробуємо наступний спосіб
-                    log.info(f"🔄 Trying next method...")
+                    log.info(f"🔄 Trying next strategy...")
                     continue
             
             # Якщо дійшли сюди - щось пішло не так
-            raise Exception("All download attempts exhausted")
+            raise Exception("All download strategies exhausted")
         
         loop = asyncio.get_running_loop()
         filepath, media_type = await loop.run_in_executor(POOL, sync_download)
