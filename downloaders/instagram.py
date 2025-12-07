@@ -9,14 +9,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import yt_dlp
 
+from .base import BaseDownloader, log
+
 try:
     import instaloader
     INSTALOADER_AVAILABLE = True
 except ImportError:
     INSTALOADER_AVAILABLE = False
     log.warning("⚠️ instaloader not available, photo posts may fail")
-
-from .base import BaseDownloader, log
 
 
 POOL = ThreadPoolExecutor(max_workers=4)
