@@ -517,15 +517,61 @@ async def download_youtube(
             
             await status_msg.edit_text("📤 Завантаження в Telegram...")
             
-            with fp.open("rb") as f:
-                if mode == AUDIO:
-                    await context.bot.send_audio(chat_id, audio=InputFile(f, filename=fp.name))
-                else:
-                    await context.bot.send_video(
-                        chat_id,
-                        video=InputFile(f, filename=fp.name),
-                        supports_streaming=True
-                    )
+            # Retry mechanism for custom API server
+            max_retries = 3
+            retry_count = 0
+            last_error = None
+            
+            while retry_count < max_retries:
+                try:
+                    with fp.open("rb") as f:
+                        if mode == AUDIO:
+                            await context.bot.send_audio(
+                                chat_id, 
+                                audio=InputFile(f, filename=fp.name),
+                                read_timeout=300,
+                                write_timeout=300,
+                                connect_timeout=60,
+                                pool_timeout=60
+                            )
+                        else:
+                            await context.bot.send_video(
+                                chat_id,
+                                video=InputFile(f, filename=fp.name),
+                                supports_streaming=True,
+                                read_timeout=300,
+                                write_timeout=300,
+                                connect_timeout=60,
+                                pool_timeout=60
+                            )
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    last_error = e
+                    retry_count += 1
+                    error_msg = str(e)
+                    error_type = type(e).__name__
+                    
+                    log.warning(f"⚠️ Upload attempt {retry_count}/{max_retries} failed: [{error_type}] {error_msg}")
+                    
+                    # Логуємо детальну інформацію для діагностики
+                    if hasattr(e, '__dict__'):
+                        log.debug(f"Error details: {e.__dict__}")
+                    
+                    if retry_count < max_retries:
+                        import asyncio
+                        await asyncio.sleep(2 ** retry_count)  # Exponential backoff: 2s, 4s, 8s
+                    else:
+                        # All retries failed, upload to gofile.io as fallback
+                        log.error(f"❌ All {max_retries} upload attempts failed, using gofile.io fallback")
+                        await status_msg.edit_text(f"📤 Telegram API недоступний, завантажую на GoFile.io...")
+                        link = await upload_to_gofile(fp)
+                        file_type = "Відео" if mode == VIDEO else "Аудіо"
+                        await status_msg.edit_text(
+                            f"✅ {file_type} завантажено ({file_size / 1024 / 1024:.1f} MB)\n\n"
+                            f"🔗 Telegram API тимчасово недоступний, файл на gofile.io:\n{link}"
+                        )
+                        return
             
             try:
                 await status_msg.delete()

@@ -169,10 +169,29 @@ class YouTubeDownloader(BaseDownloader):
             
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                original_path = ydl.prepare_filename(info)
                 
+                if not info:
+                    raise Exception("Failed to extract video info")
+                
+                # Для audio режиму файл вже конвертований в mp3
                 if mode == "audio":
-                    return str(Path(original_path).with_suffix(".mp3")), mode
+                    # prepare_filename поверне .mp4, але ffmpeg вже конвертував в .mp3
+                    base_path = ydl.prepare_filename(info)
+                    mp3_path = str(Path(base_path).with_suffix(".mp3"))
+                    
+                    # Перевіряємо чи файл існує
+                    if not Path(mp3_path).exists():
+                        # Якщо mp3 не знайдено, шукаємо будь-який аудіо файл
+                        audio_files = list(download_dir.glob("*.mp3"))
+                        if audio_files:
+                            mp3_path = str(audio_files[-1])  # Найновіший файл
+                        else:
+                            raise Exception(f"Audio file not found: {mp3_path}")
+                    
+                    return mp3_path, mode
+                else:
+                    # Для відео
+                    original_path = ydl.prepare_filename(info)
                 return original_path, mode
         
         loop = asyncio.get_running_loop()
