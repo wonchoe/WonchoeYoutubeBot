@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""
+Автоматичне оновлення YouTube cookies через headless браузер
+Запускається як sidecar або cronjob
+"""
+
+import asyncio
+import json
+import logging
+from pathlib import Path
+from playwright.async_api import async_playwright
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("cookie_refresher")
+
+COOKIE_FILE = Path("/tmp/ytdl-cookies.txt")
+YOUTUBE_URL = "https://www.youtube.com"
+
+
+async def refresh_cookies():
+    """Оновити cookies з браузера де користувач залогінений"""
+    
+    log.info("🔄 Starting cookie refresh...")
+    
+    async with async_playwright() as p:
+        # Запускаємо Chrome з persistent context (зберігає логін між запусками)
+        browser = await p.chromium.launch_persistent_context(
+            user_data_dir="/tmp/playwright-profile",
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+            ],
+        )
+        
+        try:
+            page = await browser.new_page()
+            
+            # Перевіряємо чи вже залогінені
+            log.info("📱 Opening YouTube...")
+            await page.goto(YOUTUBE_URL, wait_until="domcontentloaded", timeout=30000)
+            
+            # Чекаємо завантаження
+            await asyncio.sleep(3)
+            
+            # Перевіряємо чи залогінені
+            is_logged_in = await page.locator('button[aria-label*="account"]').count() > 0
+            
+            if not is_logged_in:
+                log.warning("⚠️ Not logged in! Manual login required.")
+                log.warning("   Please run: python cookie_refresher.py --login")
+                return False
+            
+            log.info("✅ Logged in, extracting cookies...")
+            
+            # Отримуємо cookies
+            cookies = await browser.cookies()
+            
+            # Фільтруємо тільки YouTube cookies
+            youtube_cookies = [
+                c for c in cookies 
+                if 'youtube.com' in c.get('domain', '') or 'google.com' in c.get('domain', '')
+            ]
+            
+            if not youtube_cookies:
+                log.error("❌ No YouTube cookies found")
+                return False
+            
+            # Конвертуємо в Netscape format
+            netscape_lines = ["# Netscape HTTP Cookie File\n"]
+            
+            for cookie in youtube_cookies:
+                domain = cookie.get('domain', '')
+                flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+                path = cookie.get('path', '/')
+                secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                expiration = str(int(cookie.get('expires', -1)))
+                name = cookie.get('name', '')
+                value = cookie.get('value', '')
+                
+                line = f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n"
+                netscape_lines.append(line)
+            
+            # Зберігаємо
+            COOKIE_FILE.write_text(''.join(netscape_lines))
+            
+            log.info(f"✅ Saved {len(youtube_cookies)} cookies to {COOKIE_FILE}")
+            log.info(f"📊 Cookie file size: {COOKIE_FILE.stat().st_size} bytes")
+            
+            # Перевіряємо критичні cookies
+            cookie_names = [c.get('name') for c in youtube_cookies]
+            critical = ['__Secure-3PSID', '__Secure-1PSID', 'SAPISID', 'SSID']
+            found = [c for c in critical if c in cookie_names]
+            
+            if found:
+                log.info(f"✅ Critical cookies present: {', '.join(found)}")
+            else:
+                log.warning(f"⚠️ Missing critical cookies: {', '.join(critical)}")
+            
+            return True
+            
+        except Exception as e:
+            log.error(f"❌ Error: {e}")
+            return False
+        
+        finally:
+            await browser.close()
+
+
+async def interactive_login():
+    """Інтерактивний логін для першого разу"""
+    
+    log.info("🔐 Interactive login mode...")
+    log.info("   Browser will open, please login manually")
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch_persistent_context(
+            user_data_dir="/tmp/playwright-profile",
+            headless=False,  # Видимий браузер
+            args=[
+                '--disable-blink-features=AutomationControlled',
+            ],
+        )
+        
+        try:
+            page = await browser.new_page()
+            await page.goto(YOUTUBE_URL)
+            
+            log.info("📱 Browser opened. Please:")
+            log.info("   1. Login to your YouTube/Google account")
+            log.info("   2. Wait until you see your avatar in top right")
+            log.info("   3. Press Enter here when done...")
+            
+            input()  # Wait for user
+            
+            log.info("✅ Saving cookies...")
+            
+            # Зберігаємо cookies
+            cookies = await browser.cookies()
+            youtube_cookies = [
+                c for c in cookies 
+                if 'youtube.com' in c.get('domain', '') or 'google.com' in c.get('domain', '')
+            ]
+            
+            # Netscape format
+            netscape_lines = ["# Netscape HTTP Cookie File\n"]
+            for cookie in youtube_cookies:
+                domain = cookie.get('domain', '')
+                flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+                path = cookie.get('path', '/')
+                secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                expiration = str(int(cookie.get('expires', -1)))
+                name = cookie.get('name', '')
+                value = cookie.get('value', '')
+                
+                line = f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n"
+                netscape_lines.append(line)
+            
+            COOKIE_FILE.write_text(''.join(netscape_lines))
+            
+            log.info(f"✅ Saved {len(youtube_cookies)} cookies")
+            log.info(f"📁 Cookie file: {COOKIE_FILE}")
+            log.info("✅ You can now run automatic refresh")
+            
+        finally:
+            await browser.close()
+
+
+async def main():
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--login":
+        await interactive_login()
+    else:
+        success = await refresh_cookies()
+        sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
