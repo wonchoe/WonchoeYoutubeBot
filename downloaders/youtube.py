@@ -192,10 +192,16 @@ class YouTubeDownloader(BaseDownloader):
                     log.warning(f"⚠️ Could not verify cookies: {e}")
                 
                 # ПЕРЕВІРКА: чи cookies дійсно працюють?
-                loop = asyncio.get_event_loop()
-                cookies_valid = loop.run_until_complete(verify_cookies_login(cookies_path))
-                if not cookies_valid:
-                    log.warning("⚠️ Cookies verification failed - downloads may not work!")
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    cookies_valid = loop.run_until_complete(verify_cookies_login(cookies_path))
+                    loop.close()
+                    
+                    if not cookies_valid:
+                        log.warning("⚠️ Cookies verification failed - downloads may not work!")
+                except Exception as e:
+                    log.warning(f"⚠️ Cookie verification error: {e}")
             else:
                 log.warning("⚠️ No cookies - YouTube downloads may fail!")
 
