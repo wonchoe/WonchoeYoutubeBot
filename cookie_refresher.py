@@ -14,13 +14,17 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("cookie_refresher")
 
 COOKIE_FILE = Path("/var/www/ytdl-cookies.txt")
-YOUTUBE_URL = "https://www.youtube.com"
+SITES = [
+    "https://www.youtube.com",
+    "https://www.facebook.com", 
+    "https://www.instagram.com"
+]
 
 
 async def refresh_cookies(save_html=False):
     """Оновити cookies з браузера де користувач залогінений"""
     
-    log.info("🔄 Starting cookie refresh...")
+    log.info("🔄 Starting cookie refresh for YouTube, Facebook, Instagram...")
     
     async with async_playwright() as p:
         # Запускаємо Chrome з persistent context (зберігає логін між запусками)
@@ -37,15 +41,15 @@ async def refresh_cookies(save_html=False):
         try:
             page = await browser.new_page()
             
-            # Перевіряємо чи вже залогінені
-            log.info("📱 Opening YouTube...")
-            await page.goto(YOUTUBE_URL, wait_until="domcontentloaded", timeout=30000)
+            # Відвідуємо всі сайти для оновлення cookies
+            for site in SITES:
+                log.info(f"📱 Opening {site}...")
+                await page.goto(site, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)
             
-            # Чекаємо завантаження
-            await asyncio.sleep(5)
-            
-            # Зберігаємо HTML для debug
+            # Зберігаємо HTML для debug (тільки YouTube)
             if save_html:
+                await page.goto(SITES[0], wait_until="domcontentloaded", timeout=30000)
                 html_content = await page.content()
                 html_path = Path("/tmp/youtube_debug.html")
                 html_path.write_text(html_content)
@@ -74,20 +78,24 @@ async def refresh_cookies(save_html=False):
             # Отримуємо всі cookies (вже маємо з перевірки вище)
             all_cookies = await browser.cookies()
             
-            # Фільтруємо тільки YouTube і Google cookies
-            youtube_cookies = [
+            # Фільтруємо cookies для YouTube, Facebook, Instagram, Google
+            relevant_cookies = [
                 c for c in all_cookies
-                if 'youtube.com' in c.get('domain', '') or 'google.com' in c.get('domain', '')
+                if any(domain in c.get('domain', '') for domain in [
+                    'youtube.com', 'google.com', 
+                    'facebook.com', 'fb.com',
+                    'instagram.com', 'cdninstagram.com'
+                ])
             ]
             
-            if not youtube_cookies:
-                log.error("❌ No YouTube cookies found")
+            if not relevant_cookies:
+                log.error("❌ No cookies found for any platform")
                 return False
             
             # Конвертуємо в Netscape format
             netscape_lines = ["# Netscape HTTP Cookie File\n"]
             
-            for cookie in youtube_cookies:
+            for cookie in relevant_cookies:
                 domain = cookie.get('domain', '')
                 flag = 'TRUE' if domain.startswith('.') else 'FALSE'
                 path = cookie.get('path', '/')
@@ -111,16 +119,25 @@ async def refresh_cookies(save_html=False):
             
             # Логуємо критичні cookies для діагностики
             critical_found = [
-                c.get('name') for c in youtube_cookies 
+                c.get('name') for c in relevant_cookies
                 if c.get('name') in critical_cookies
             ]
             
-            log.info(f"✅ Saved {len(youtube_cookies)} cookies to {COOKIE_FILE}")
+            log.info(f"✅ Saved {len(relevant_cookies)} cookies to {COOKIE_FILE}")
             log.info(f"📊 Cookie file size: {COOKIE_FILE.stat().st_size} bytes")
-            log.info(f"✅ Critical cookies present: {', '.join(critical_found)}")
+            log.info(f"✅ Critical YouTube cookies: {', '.join(critical_found)}")
+            
+            # Статистика по платформах
+            youtube_count = len([c for c in relevant_cookies if 'youtube.com' in c.get('domain', '') or 'google.com' in c.get('domain', '')])
+            facebook_count = len([c for c in relevant_cookies if 'facebook.com' in c.get('domain', '') or 'fb.com' in c.get('domain', '')])
+            instagram_count = len([c for c in relevant_cookies if 'instagram.com' in c.get('domain', '')])
+            
+            log.info(f"📊 YouTube cookies: {youtube_count}")
+            log.info(f"📊 Facebook cookies: {facebook_count}")
+            log.info(f"📊 Instagram cookies: {instagram_count}")
             
             # Перевіряємо критичні cookies
-            cookie_names = [c.get('name') for c in youtube_cookies]
+            cookie_names = [c.get('name') for c in relevant_cookies]
             critical = ['__Secure-3PSID', '__Secure-1PSID', 'SAPISID', 'SSID']
             found = [c for c in critical if c in cookie_names]
             
@@ -143,7 +160,7 @@ async def interactive_login():
     """Інтерактивний логін для першого разу"""
     
     log.info("🔐 Interactive login mode...")
-    log.info("   Browser will open, please login manually")
+    log.info("   Browser will open, please login to YouTube, Facebook, and Instagram")
     
     async with async_playwright() as p:
         browser = await p.chromium.launch_persistent_context(
@@ -156,12 +173,18 @@ async def interactive_login():
         
         try:
             page = await browser.new_page()
-            await page.goto(YOUTUBE_URL)
             
-            log.info("📱 Browser opened. Please:")
-            log.info("   1. Login to your YouTube/Google account")
-            log.info("   2. Wait until you see your avatar in top right")
-            log.info("   3. Press Enter here when done...")
+            # Відкриваємо всі сайти для логіну
+            for i, site in enumerate(SITES, 1):
+                await page.goto(site)
+                log.info(f"📱 Opened {site} ({i}/{len(SITES)})")
+                await asyncio.sleep(5)  # Збільшено час для завантаження
+            
+            log.info("📱 Please:")
+            log.info("   1. Login to YouTube/Google account")
+            log.info("   2. Login to Facebook account (if needed)")
+            log.info("   3. Login to Instagram account (if needed)")
+            log.info("   4. Press Enter here when done...")
             
             input()  # Wait for user
             

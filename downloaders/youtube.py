@@ -3,7 +3,6 @@
 import os
 import re
 import time
-import asyncio
 from pathlib import Path
 from typing import Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -14,81 +13,6 @@ from .base import BaseDownloader, log
 
 
 POOL = ThreadPoolExecutor(max_workers=4)
-
-
-async def verify_cookies_login(cookies_path: str) -> bool:
-    """Перевірка чи cookies дійсно залогінені через Playwright"""
-    try:
-        from playwright.async_api import async_playwright
-        
-        log.info("🔍 Verifying cookies with Playwright...")
-        
-        async with async_playwright() as p:
-            browser = await p.chromium.launch_persistent_context(
-                user_data_dir="/tmp/cookie-verify-profile",
-                headless=True,
-            )
-            
-            try:
-                page = await browser.new_page()
-                
-                # Завантажуємо cookies
-                if os.path.exists(cookies_path):
-                    import http.cookiejar
-                    from urllib.parse import urlparse
-                    
-                    cj = http.cookiejar.MozillaCookieJar(cookies_path)
-                    cj.load(ignore_discard=True, ignore_expires=True)
-                    
-                    playwright_cookies = []
-                    for cookie in cj:
-                        playwright_cookies.append({
-                            'name': cookie.name,
-                            'value': cookie.value,
-                            'domain': cookie.domain,
-                            'path': cookie.path,
-                            'expires': cookie.expires if cookie.expires else -1,
-                            'httpOnly': False,
-                            'secure': cookie.secure,
-                        })
-                    
-                    await browser.add_cookies(playwright_cookies)
-                    log.info(f"📦 Loaded {len(playwright_cookies)} cookies into browser")
-                
-                # Відкриваємо YouTube
-                await page.goto("https://www.youtube.com", wait_until="domcontentloaded", timeout=15000)
-                await asyncio.sleep(3)
-                
-                # Зберігаємо HTML для debug
-                html_content = await page.content()
-                debug_file = Path("/tmp/ytdl_cookie_verify.html")
-                debug_file.write_text(html_content)
-                
-                # Перевіряємо LOGGED_IN
-                is_logged_in = '"LOGGED_IN":true' in html_content or '"LOGGED_IN": true' in html_content
-                
-                if is_logged_in:
-                    log.info("✅ Cookies verification: LOGGED_IN = true")
-                    log.info(f"📄 Debug HTML saved: {debug_file}")
-                else:
-                    log.warning("⚠️ Cookies verification: LOGGED_IN = false or not found")
-                    log.warning(f"📄 Debug HTML saved: {debug_file}")
-                    # Шукаємо username для додаткової перевірки
-                    if '"name":"' in html_content:
-                        log.info("👤 Found user name in HTML - possibly logged in")
-                
-                return is_logged_in
-                
-            finally:
-                await browser.close()
-                # Видаляємо temp profile
-                import shutil
-                if os.path.exists("/tmp/cookie-verify-profile"):
-                    shutil.rmtree("/tmp/cookie-verify-profile", ignore_errors=True)
-                
-    except Exception as e:
-        log.warning(f"⚠️ Cookie verification failed: {e}")
-        return False
 
 
 class YouTubeDownloader(BaseDownloader):
@@ -196,18 +120,6 @@ class YouTubeDownloader(BaseDownloader):
                         log.info(f"🔑 Critical cookies found: {', '.join(found_critical)}")
                 except Exception as e:
                     log.warning(f"⚠️ Could not verify cookies: {e}")
-                
-                # ПЕРЕВІРКА: чи cookies дійсно працюють?
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    cookies_valid = loop.run_until_complete(verify_cookies_login(cookies_path))
-                    loop.close()
-                    
-                    if not cookies_valid:
-                        log.warning("⚠️ Cookies verification failed - downloads may not work!")
-                except Exception as e:
-                    log.warning(f"⚠️ Cookie verification error: {e}")
             else:
                 log.warning("⚠️ No cookies - YouTube downloads may fail!")
 

@@ -1,103 +1,116 @@
 # Multi-Platform Media Downloader Bot
 
-Telegram бот для завантаження медіа з різних платформ.
+Telegram бот для завантаження медіа з YouTube, Instagram, Facebook та TikTok.
 
 ## Підтримувані платформи
 
 ✅ **YouTube** - audio (MP3 192kbps) + video (360p/480p/720p)  
 ✅ **Instagram** - пости, reels, IGTV, фото, карусель з фото  
-✅ **TikTok** - відео (включно з короткими посиланнями)  
-⚠️ **Facebook** - звичайні відеопости, Watch (❌ НЕ Reels)
+✅ **Facebook** - відеопости та Watch  
+✅ **TikTok** - відео (включно з короткими посиланнями)
 
-## Швидкий старт
-
-### Cookies (ОБОВ'ЯЗКОВО!)
-
-Для коректної роботи потрібні cookies від YouTube та Instagram:
-
-```bash
-# Експортуйте cookies через браузерне розширення або yt-dlp
-yt-dlp --cookies-from-browser chrome --cookies /tmp/cookies.txt https://www.youtube.com
-
-# Або додайте вручну в /tmp/cookies.txt
-```
-
-📖 Детальні інструкції:
-- [YOUTUBE_COOKIES.md](YOUTUBE_COOKIES.md) - як виправити "Sign in to confirm you're not a bot"
-- [INSTAGRAM_COOKIES.md](INSTAGRAM_COOKIES.md) - для завантаження фото
-- [FACEBOOK_COOKIES.md](FACEBOOK_COOKIES.md) - для Facebook відео
-
-### Docker (рекомендовано)
-
-```bash
-cd /mnt/laravel/youtube-audio-downloader
-
-# Створіть .env файл
-echo "TELEGRAM_BOT_TOKEN=your_token_here" > .env
-
-# Додайте cookies
-yt-dlp --cookies-from-browser chrome --cookies /tmp/cookies.txt https://www.youtube.com
-
-# Запустіть
-docker-compose up -d
-
-# Логи
-docker-compose logs -f
-```
-
-### Локально
-
-```bash
-cd /mnt/laravel/youtube-audio-downloader
-
-# Створіть virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Встановіть залежності
-pip install -r requirements.txt
-
-# Створіть .env
-echo "TELEGRAM_BOT_TOKEN=your_token_here" > .env
-
-# Додайте cookies
-yt-dlp --cookies-from-browser chrome --cookies /tmp/cookies.txt https://www.youtube.com
-
-# Запустіть
-python app.py
-```
-
-## Можливості
+## Особливості
 
 - 🎯 Автоматичне визначення платформи
 - 🎬 Вибір якості для YouTube (360p/480p/720p)
 - 📦 Підтримка каруселів Instagram
-- 📤 Автоматичне завантаження великих файлів (>50MB) на gofile.io
-- 🍪 Підтримка cookies для bypassing rate limits
+- 📤 Custom Telegram Bot API (підтримка файлів до 2GB)
+- 🍪 Автоматичне оновлення cookies кожні 4 години
 - 🧹 Автоматичне очищення файлів після надсилання
 - ⏱️ Progress bar з ETA
 - 🔒 Single instance lock
 
+## Cookie Management
+
+Бот використовує єдиний файл cookies для всіх платформ.  
+**📖 Детальні інструкції: [COOKIE_MANAGEMENT.md](COOKIE_MANAGEMENT.md)**
+
+### Швидка настройка cookies
+
+Перший раз (на локальному сервері з GUI):
+```bash
+cd /mnt/laravel/youtube-audio-downloader
+source venv/bin/activate
+python3 cookie_refresher.py --login
+```
+
+Відкриється браузер - залогінься на YouTube, Instagram, Facebook.  
+Cookies автоматично збережуться та будуть оновлюватись кожні 4 години через Kubernetes CronJob.
+
+## Deployment
+
+### Kubernetes (Production)
+
+```bash
+# Build та push Docker image
+cd /mnt/laravel/youtube-audio-downloader
+docker build -t wonchoe/ytdl-bot:latest .
+docker push wonchoe/ytdl-bot:latest
+
+# Deploy (файли в wonchoeyt repo)
+kubectl apply -f k8s/
+
+# Restart deployment
+kubectl rollout restart deployment/ytdl-bot -n wonchoeyoutubebot
+
+# Перевірка
+kubectl get pods -n wonchoeyoutubebot
+kubectl logs -n wonchoeyoutubebot deployment/ytdl-bot --tail=50
+```
+
+### Docker Compose (Local)
+
+```bash
+docker-compose up -d
+docker-compose logs -f
+```
+
+## Структура проекту
+
+```
+/mnt/laravel/youtube-audio-downloader/
+├── app.py                    # Main Telegram bot
+├── cookie_refresher.py       # Cookie management (login + auto-refresh)
+├── entrypoint.sh            # Docker entrypoint
+├── Dockerfile               # Container definition
+├── requirements.txt         # Python dependencies
+├── .env                     # Environment variables (TELEGRAM_BOT_TOKEN)
+├── downloaders/             # Platform-specific downloaders
+│   ├── youtube.py          # YouTube (yt-dlp with cookies)
+│   ├── instagram.py        # Instagram (yt-dlp + instaloader + gallery-dl)
+│   ├── facebook.py         # Facebook (yt-dlp with cookies)
+│   └── tiktok.py           # TikTok (yt-dlp)
+├── utils/                   # Helpers
+│   ├── progress.py         # Progress bar
+│   └── telegram_api.py     # Custom Telegram Bot API client
+├── COOKIE_MANAGEMENT.md     # Cookie setup guide
+└── README.md               # This file
+```
+
 ## Troubleshooting
 
 ### YouTube: "Sign in to confirm you're not a bot"
-```bash
-# Експортуйте cookies
-yt-dlp --cookies-from-browser chrome --cookies /tmp/cookies.txt https://www.youtube.com
+→ Див. [COOKIE_MANAGEMENT.md](COOKIE_MANAGEMENT.md)
 
-# Перезапустіть бота
-docker-compose restart
+### Instagram: "401 Unauthorized"
+→ Запусти `python3 cookie_refresher.py --login` та залогінься на Instagram
+
+### Facebook downloads не працюють
+→ Перевір cookies: `cat /var/www/ytdl-cookies.txt | grep facebook`
+
+### CronJob не оновлює cookies
+```bash
+kubectl logs -n wonchoeyoutubebot -l job-name=cookie-refresher --tail=50
 ```
 
-### Instagram: "401 Unauthorized" для фото
-```bash
-# Додайте Instagram cookies
-yt-dlp --cookies-from-browser chrome --cookies /tmp/ig_cookies.txt https://www.instagram.com
-cat /tmp/ig_cookies.txt >> /tmp/cookies.txt
-```
+## Environment Variables
 
-### Timeout помилки при великих файлах
-- Вже виправлено - бот автоматично використовує gofile.io для файлів >50MB
+- `TELEGRAM_BOT_TOKEN` - Telegram Bot API token (required)
+- Custom Telegram Bot API: `https://tgbot.agro-post.com` (2GB file support)
+
+## License
+
+MIT
 - Збільшені timeouts до 120 секунд
 
 ## Структура проекту
