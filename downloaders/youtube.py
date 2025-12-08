@@ -170,8 +170,14 @@ class YouTubeDownloader(BaseDownloader):
                 if node_result.returncode == 0:
                     node_path = node_result.stdout.strip()
                     log.info(f"🟢 Node.js found at: {node_path}")
+                    
+                    # КРИТИЧНО: Додаємо Node.js директорію в PATH
+                    node_dir = os.path.dirname(node_path)
+                    if node_dir not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = f"{node_dir}:{os.environ.get('PATH', '')}"
+                        log.info(f"➕ Added Node.js to PATH: {node_dir}")
             except Exception as e:
-                log.warning(f"⚠️  Could not locate Node.js: {e}")
+                log.warning(f"⚠️ Node.js check failed: {e}")
             
             # Стратегія: cookies > різні player clients (OAuth deprecated!)
             cookies_path = "/var/www/ytdl-cookies.txt"
@@ -222,10 +228,10 @@ class YouTubeDownloader(BaseDownloader):
                 },
             }
             
-            # Якщо Node.js знайдено, додаємо в конфігурацію для JS challenge solving
+            # Node.js вже в PATH, yt-dlp автоматично знайде його
             if node_path:
-                opts["exec_cmd"] = {"node": node_path}
-                log.info(f"✅ Node.js configured for yt-dlp at: {node_path}")
+                log.info(f"✅ Node.js configured for yt-dlp (in PATH)")
+
 
 
             
@@ -263,68 +269,14 @@ class YouTubeDownloader(BaseDownloader):
             # Різні стратегії обходу YouTube блокування
             strategies = []
             
-            # ПРІОРИТЕТ 1: Cookies з mediaconnect client (краще для auth)
+            # ПРІОРИТЕТ 1: Просто cookies без player_client обмежень
             if use_cookies:
-                opts_mediaconnect = opts.copy()
-                opts_mediaconnect["cookiefile"] = cookies_path
-                opts_mediaconnect["extractor_args"] = {
-                    "youtube": {
-                        "player_client": ["mediaconnect", "web"],
-                        "skip": ["hls"],
-                    }
-                }
-                strategies.append(("with cookies (mediaconnect)", opts_mediaconnect))
-            
-            # ПРІОРИТЕТ 2: Cookies з web client (fallback)
-            if use_cookies:
-                opts_with_cookies = opts.copy()
-                opts_with_cookies["cookiefile"] = cookies_path
-                opts_with_cookies["extractor_args"] = {
-                    "youtube": {
-                        "player_client": ["web"],
-                        "skip": ["hls"],
-                    }
-                }
-                strategies.append(("with cookies (web)", opts_with_cookies))
-            
-            # Стратегія 2: Без cookies + ios client
-            opts_ios = opts.copy()
-            opts_ios["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["ios", "web"],
-                    "skip": ["hls", "dash"],
-                }
-            }
-            strategies.append(("without cookies (ios)", opts_ios))
-            
-            # Стратегія 3: Без cookies + mweb client (mobile web)
-            opts_mweb = opts.copy()
-            opts_mweb["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["mweb", "web"],
-                    "skip": ["hls", "dash"],
-                }
-            }
-            strategies.append(("without cookies (mweb)", opts_mweb))
-            
-            # Стратегія 4: Без cookies + tv client
-            opts_tv = opts.copy()
-            opts_tv["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["tv_embedded", "web"],
-                    "skip": ["hls", "dash"],
-                }
-            }
-            strategies.append(("without cookies (tv)", opts_tv))
-            
-            # Стратегія 5: Базовий android без skip
-            opts_android_full = opts.copy()
-            opts_android_full["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["android"],
-                }
-            }
-            strategies.append(("without cookies (android full)", opts_android_full))
+                opts_simple = opts.copy()
+                opts_simple["cookiefile"] = cookies_path
+                # Не обмежуємо player_client - нехай yt-dlp вибере сам
+                strategies.append(("with cookies (auto client)", opts_simple))
+            else:
+                raise Exception("YouTube downloads require cookies. Please provide valid cookies file.")
             
             for strategy_name, strategy_opts in strategies:
                 try:
