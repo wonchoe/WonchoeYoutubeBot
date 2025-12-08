@@ -17,7 +17,7 @@ COOKIE_FILE = Path("/var/www/ytdl-cookies.txt")
 YOUTUBE_URL = "https://www.youtube.com"
 
 
-async def refresh_cookies():
+async def refresh_cookies(save_html=False):
     """Оновити cookies з браузера де користувач залогінений"""
     
     log.info("🔄 Starting cookie refresh...")
@@ -43,6 +43,14 @@ async def refresh_cookies():
             
             # Чекаємо завантаження
             await asyncio.sleep(5)
+            
+            # Зберігаємо HTML для debug
+            if save_html:
+                html_content = await page.content()
+                html_path = Path("/tmp/youtube_debug.html")
+                html_path.write_text(html_content)
+                log.info(f"📄 HTML saved to {html_path}")
+                log.info(f"   View: cat /tmp/youtube_debug.html | head -100")
             
             # Перевіряємо cookies замість DOM елементів (більш надійно)
             cookies = await browser.cookies()
@@ -195,8 +203,12 @@ async def main():
     
     if len(sys.argv) > 1 and sys.argv[1] == "--login":
         await interactive_login()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--debug":
+        log.info("🐛 Debug mode: will save HTML")
+        success = await refresh_cookies(save_html=True)
+        sys.exit(0 if success else 1)
     else:
-        success = await refresh_cookies()
+        success = await refresh_cookies(save_html=False)
         sys.exit(0 if success else 1)
 
 

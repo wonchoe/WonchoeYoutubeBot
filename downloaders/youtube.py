@@ -16,6 +16,81 @@ from .base import BaseDownloader, log
 POOL = ThreadPoolExecutor(max_workers=4)
 
 
+async def verify_cookies_login(cookies_path: str) -> bool:
+    """Перевірка чи cookies дійсно залогінені через Playwright"""
+    try:
+        from playwright.async_api import async_playwright
+        
+        log.info("🔍 Verifying cookies with Playwright...")
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch_persistent_context(
+                user_data_dir="/tmp/cookie-verify-profile",
+                headless=True,
+            )
+            
+            try:
+                page = await browser.new_page()
+                
+                # Завантажуємо cookies
+                if os.path.exists(cookies_path):
+                    import http.cookiejar
+                    from urllib.parse import urlparse
+                    
+                    cj = http.cookiejar.MozillaCookieJar(cookies_path)
+                    cj.load(ignore_discard=True, ignore_expires=True)
+                    
+                    playwright_cookies = []
+                    for cookie in cj:
+                        playwright_cookies.append({
+                            'name': cookie.name,
+                            'value': cookie.value,
+                            'domain': cookie.domain,
+                            'path': cookie.path,
+                            'expires': cookie.expires if cookie.expires else -1,
+                            'httpOnly': False,
+                            'secure': cookie.secure,
+                        })
+                    
+                    await browser.add_cookies(playwright_cookies)
+                    log.info(f"📦 Loaded {len(playwright_cookies)} cookies into browser")
+                
+                # Відкриваємо YouTube
+                await page.goto("https://www.youtube.com", wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(3)
+                
+                # Зберігаємо HTML для debug
+                html_content = await page.content()
+                debug_file = Path("/tmp/ytdl_cookie_verify.html")
+                debug_file.write_text(html_content)
+                
+                # Перевіряємо LOGGED_IN
+                is_logged_in = '"LOGGED_IN":true' in html_content or '"LOGGED_IN": true' in html_content
+                
+                if is_logged_in:
+                    log.info("✅ Cookies verification: LOGGED_IN = true")
+                    log.info(f"📄 Debug HTML saved: {debug_file}")
+                else:
+                    log.warning("⚠️ Cookies verification: LOGGED_IN = false or not found")
+                    log.warning(f"📄 Debug HTML saved: {debug_file}")
+                    # Шукаємо username для додаткової перевірки
+                    if '"name":"' in html_content:
+                        log.info("👤 Found user name in HTML - possibly logged in")
+                
+                return is_logged_in
+                
+            finally:
+                await browser.close()
+                # Видаляємо temp profile
+                import shutil
+                if os.path.exists("/tmp/cookie-verify-profile"):
+                    shutil.rmtree("/tmp/cookie-verify-profile", ignore_errors=True)
+                
+    except Exception as e:
+        log.warning(f"⚠️ Cookie verification failed: {e}")
+        return False
+
+
 class YouTubeDownloader(BaseDownloader):
     """Download from YouTube, YouTube Music, etc."""
     
@@ -105,6 +180,22 @@ class YouTubeDownloader(BaseDownloader):
             if use_cookies:
                 cookie_size = os.path.getsize(cookies_path)
                 log.info(f"🍪 YouTube cookies available: {cookie_size} bytes")
+                
+                # Перевіряємо критичні cookies
+                try:
+                    with open(cookies_path, 'r') as f:
+                        cookie_content = f.read()
+                        critical = ['__Secure-3PSID', '__Secure-1PSID', 'SAPISID', 'SSID']
+                        found_critical = [c for c in critical if c in cookie_content]
+                        log.info(f"🔑 Critical cookies found: {', '.join(found_critical)}")
+                except Exception as e:
+                    log.warning(f"⚠️ Could not verify cookies: {e}")
+                
+                # ПЕРЕВІРКА: чи cookies дійсно працюють?
+                loop = asyncio.get_event_loop()
+                cookies_valid = loop.run_until_complete(verify_cookies_login(cookies_path))
+                if not cookies_valid:
+                    log.warning("⚠️ Cookies verification failed - downloads may not work!")
             else:
                 log.warning("⚠️ No cookies - YouTube downloads may fail!")
 
@@ -113,17 +204,15 @@ class YouTubeDownloader(BaseDownloader):
             opts = {
                 "outtmpl": str(download_dir / "%(title)s.%(ext)s"),
                 "quiet": False,
-                "verbose": False,
+                "verbose": True,  # Детальне логування для debug
                 "nocheckcertificate": True,
                 "progress_hooks": [progress_hook],
                 "restrictfilenames": True,
                 "noplaylist": True,
-                # Використовуємо android client для обходу Sign in challenge
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["android", "web"],
-                        "skip": ["hls", "dash"],
-                    }
+                "http_headers": {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
             }
             
@@ -168,14 +257,26 @@ class YouTubeDownloader(BaseDownloader):
             # Різні стратегії обходу YouTube блокування
             strategies = []
             
-            # ПРІОРИТЕТ 1: Cookies з web client (android не підтримує cookies!)
+            # ПРІОРИТЕТ 1: Cookies з mediaconnect client (краще для auth)
+            if use_cookies:
+                opts_mediaconnect = opts.copy()
+                opts_mediaconnect["cookiefile"] = cookies_path
+                opts_mediaconnect["extractor_args"] = {
+                    "youtube": {
+                        "player_client": ["mediaconnect", "web"],
+                        "skip": ["hls"],
+                    }
+                }
+                strategies.append(("with cookies (mediaconnect)", opts_mediaconnect))
+            
+            # ПРІОРИТЕТ 2: Cookies з web client (fallback)
             if use_cookies:
                 opts_with_cookies = opts.copy()
                 opts_with_cookies["cookiefile"] = cookies_path
                 opts_with_cookies["extractor_args"] = {
                     "youtube": {
                         "player_client": ["web"],
-                        "skip": ["hls", "dash"],
+                        "skip": ["hls"],
                     }
                 }
                 strategies.append(("with cookies (web)", opts_with_cookies))
